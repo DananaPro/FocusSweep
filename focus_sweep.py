@@ -4,12 +4,13 @@ import time
 import threading
 import customtkinter as ctk
 import ctypes
+import json
 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(u"FocusSweepApp")
 
 
 ctk.set_appearance_mode("dark")
 app = ctk.CTk()
-app.geometry("500x400")
+app.geometry("500x500")
 app.title("Focus Sweep")
 app.iconbitmap("logo.ico")  # ← your logo here!
 
@@ -46,14 +47,14 @@ system_whitelist = [
     # Script tools
     "python.exe", "cmd.exe", "powershell.exe", "py.exe","Focus Sweep",
 
-    # Extras
-    "Spotify.exe", "SignalRPG.exe", "WallpaperAlive.exe", "SignalRgb.exe","Acrobat.exe",
+     # Extras
+     "SignalRPG.exe", "WallpaperAlive.exe", "SignalRgb.exe",
 
-    # Cloud tools
-    "OneDrive.exe", "steam.exe", "steamwebhelper.exe",
+    # # Cloud tools
+    # "OneDrive.exe", "steam.exe", "steamwebhelper.exe",
 
-    # Development tools
-    "Code.exe"
+    # # Development tools
+     "Code.exe"
 ]
 
 
@@ -92,44 +93,48 @@ def focus_sweep_loop():
 
 
 
-label = ctk.CTkLabel(
-    app,
-    text="Focus Sweep is active",
-    font=("Arial", 16),
-    text_color="white"
-)
-label.pack(pady=10)
+label1 = ctk.CTkLabel(app, text="Enter deck name:", font=("Arial", 14))
+label1.pack(pady=(10, 0))
 
+deck_entry = ctk.CTkEntry(app, width=300)
+deck_entry.pack(pady=5)
 
-label = ctk.CTkLabel(
-    app,
-    text="Enter the names of the apps you want to keep running",
-    font=("Arial", 16),
-    text_color="blue"
-)
-label.pack(pady=10)
+label2 = ctk.CTkLabel(app, text="Enter apps (comma separated):", font=("Arial", 14))
+label2.pack(pady=(10, 0))
 
-
-entry = ctk.CTkEntry(app, width=300)
-entry.pack(pady=10)
+apps_entry = ctk.CTkEntry(app, width=300)
+apps_entry.pack(pady=5)
 
 textbox = ctk.CTkTextbox(app, width=350, height=150)
 textbox.pack(pady=10)
 
-button_clicked = False  # Flag to track state
+active_deck_index  = None  # Flag to track state
 
-def start_button():
-    global button_clicked, safe_apps_lower, stop_requested
 
-    user_input = entry.get().strip()
-    if not user_input:
-        textbox.insert("end", "⚠️ Please enter at least one app name.\n")
+def use_deck(i, button):
+    global active_deck_index, safe_apps_lower, stop_requested
+    
+    with open("decks.json", "r") as f:
+        data = json.load(f)
+    deck_names = list(data.keys())
+
+    if i >= len(deck_names):
+        # No deck saved for this button index
+        textbox.insert("end", f"⚠️ No deck found for deck {i+1}.\n")
+        textbox.see("end")
         return
+    
+    try:
+        apps = data[deck_names[i]]
+    except IndexError:
+        apps = []
 
-    if button_clicked:
-        # Stop focus sweep
+    
+
+    if active_deck_index == i:
+        # Stop current active deck
         stop_requested = True
-        button_clicked = False
+        active_deck_index = None
         button.configure(
             text="Start",
             text_color="black",
@@ -139,14 +144,16 @@ def start_button():
         textbox.see("end")
         return
 
-    # Start focus sweep
-    stop_requested = False  # Reset stop flag
+    # If another deck was active, you might want to reset its button here
 
-    allowed_apps = [app.strip() + ".exe" for app in user_input.lower().split(',')]
+    # Start new deck
+    stop_requested = False
+    apps = data[deck_names[i]]
+    allowed_apps = [app.strip().lower() + ".exe" for app in apps]
     safe_apps = set(allowed_apps + system_whitelist)
     safe_apps_lower = set(app.lower() for app in safe_apps)
 
-    button_clicked = True
+    active_deck_index = i  # Set active deck to current
 
     threading.Thread(target=focus_sweep_loop, daemon=True).start()
 
@@ -161,15 +168,125 @@ def start_button():
         hover_color="red"
     )
 
+
+
+global buttons
+
+def save_deck():
+    deck_name = deck_entry.get().strip()
+    apps_raw = apps_entry.get().strip()
+    if not deck_name or not apps_raw:
+        textbox.insert("end", "⚠️ Please enter deck name and at least one app.\n")
+        textbox.see("end")
+        return
+
+    apps_list = [app.strip() for app in apps_raw.split(',')]
+
+    # Load existing decks or start fresh
+    try:
+        with open("decks.json", "r") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError):
+        data = {}
+
+        # Load existing decks or start fresh
+    try:
+        with open("decks.json", "r") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError):
+        data = {}
+
+    # Update deck data (add or replace)
+    if deck_name in data:
+        data[deck_name].extend(apps_list)
+        data[deck_name] = list(set(data[deck_name]))  # Optional: remove duplicates
+    else:
+        data[deck_name] = apps_list
+
+    with open("decks.json", "w") as f:
+        json.dump(data, f, indent=2)
+
+    textbox.insert("end", f"✅ Deck '{deck_name}' saved.\n")
+    textbox.see("end")
+
+    # Update button texts to match deck names
+    buttons = [deck_one, deck_two, deck_three]
+    deck_names = list(data.keys())
+
+    for i, button in enumerate(buttons):
+        if i < len(deck_names):
+            button.configure(text=deck_names[i])
+        else:
+            button.configure(text="")  # clear extra buttons if fewer decks
+
+    # Clear inputs if you want
+    deck_entry.delete(0, "end")
+    apps_entry.delete(0, "end")
+    print(data)
+    
+def clear_all_decks():
+    with open("decks.json", "w") as f:
+        json.dump({}, f, indent=2)
+
+    with open("decks.json", "r") as f:
+        data = json.load(f)
+
+    textbox.insert("end", "🗑️ All decks deleted.\n")
+    textbox.see("end")
+
+    for button in [deck_one, deck_two, deck_three]:
+        button.configure(text="")
+
+    print(data)
+
+
+
+
+save_button = ctk.CTkButton(app, text="Save Deck", command=save_deck)
+save_button.pack(pady=10)
+
+button_row = ctk.CTkFrame(app, fg_color="gray20")
+button_row.pack(pady=20)
+
+
+deck_one = ctk.CTkButton(button_row, text="Deck 1", command=lambda: use_deck(0,deck_one))
+deck_one.pack(side="left", padx=10)
+
+deck_two = ctk.CTkButton(button_row, text="Deck 2", command=lambda: use_deck(1,deck_two))
+deck_two.pack(side="left", padx=10)
+
+deck_three = ctk.CTkButton(button_row, text="Deck 3", command=lambda: use_deck(2,deck_three))
+deck_three.pack(side="left", padx=10)
+
+
+try:
+    with open("decks.json", "r") as f:
+        data = json.load(f)
+except (json.JSONDecodeError, FileNotFoundError):
+    data = {}
+
+buttons = [deck_one, deck_two, deck_three]
+deck_names = list(data.keys())
+
+for i, button in enumerate(buttons):
+    if i < len(deck_names):
+        button.configure(text=deck_names[i])
+    else:
+        button.configure(text="")
+
+
+save_button = ctk.CTkButton(app, text="clear_all_decks", command=clear_all_decks)
+save_button.pack(pady=10)
+
 # Create the Start button
-button = ctk.CTkButton(
-    app,
-    text="Start",
-    command=start_button,
-    text_color="black",    # Default text black
-    hover_color="green"      # Hover green for "Start" state
-)
-button.pack(pady=10)
+# button = ctk.CTkButton(
+#     app,
+#     text="Start",
+#     command=start_button,
+#     text_color="black",    # Default text black
+#     hover_color="green"      # Hover green for "Start" state
+# )
+# button.pack(pady=10)
 
 
 

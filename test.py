@@ -1,50 +1,25 @@
-import threading
-import time
-import customtkinter as ctk
+import json
+import os
 
-# Create the main window
-app = ctk.CTk()
-app.geometry("500x400")
-app.title("Your App Name")
+# Try to load the decks file
+try:
+    with open("decks.json", "r") as f:
+        data = json.load(f)
+except (json.JSONDecodeError, FileNotFoundError):
+    data = {}  # Start fresh if file is empty or missing
 
-def background_task():
-    for i in range(5):
-        print(f"Background task running... {i+1}")
-        time.sleep(1)  # wait 1 second
+# Get user input
+add_deck = input("To create a deck, choose a name:\n")
+app_deck = input("What apps would you like to add? (Separate with commas)\n")
+app_list = [app.strip() for app in app_deck.split(',')]
 
-print("Main program starts")
+# Add deck
+data[add_deck] = app_list
 
-# Create a thread to run the background task
-thread = threading.Thread(target=background_task)
+# Save it
+with open("decks.json", "w") as f:
+    json.dump(data, f, indent=2)
 
-# Start the thread
-thread.start()
-
-# Meanwhile, main program keeps running
-# 1. Label (text display)
-label = ctk.CTkLabel(app, text="Hello world!", font=("Arial", 16))
-label.pack(pady=10)  # pack it into the window with vertical padding
-
-# 2. Entry (single-line text input)
-entry = ctk.CTkEntry(app, width=300)
-entry.pack(pady=10)
-
-# 3. Button (clickable button)
-def start_button():
-    print("Button clicked!")
-
-button = ctk.CTkButton(app, text="start", command=start_button)
-button.pack(pady=10)
-
-# 4. Textbox (multi-line text display/input)
-textbox = ctk.CTkTextbox(app, width=350, height=150)
-textbox.pack(pady=10)
-
-app.mainloop()
-
-# Wait for the background thread to finish before exiting
-thread.join()
-
-print("Main program finished")
-
-
+print("LET ME COOK FRFR💀 EMOJI")
+print("your data is:")
+print(json.dumps(data, indent=2))
