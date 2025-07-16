@@ -13,7 +13,7 @@ app = ctk.CTk()
 app.geometry("500x500")
 app.title("Focus Sweep")
 app.iconbitmap("logo.ico")  # ← your logo here!
-
+ 
 
 # ------------------------------
 # 1. Customize thresholds
@@ -29,7 +29,7 @@ CHECK_INTERVAL = 5      # seconds between scans
 system_whitelist = [
     # Core Windows
     "System", "System Idle Process", "wininit.exe", "winlogon.exe",
-    "services.exe", "lsass.exe", "csrss.exe", "smss.exe",
+    "services.exe", "lsass.exe", "csrss.exe", "smss.exe","SystemSettings",
 
     # Shell & UI
     "explorer.exe", "svchost.exe", "sihost.exe", "StartMenuExperienceHost.exe",
@@ -77,7 +77,7 @@ def focus_sweep_loop():
                         continue
                     ram_mb = proc.info['memory_info'].rss / (1024 * 1024)
                     cpu_percent = proc.cpu_percent(interval=0.1)
-                    if ram_mb > MIN_RAM_MB or cpu_percent > MIN_CPU_PERCENT:
+                    if (ram_mb > MIN_RAM_MB or cpu_percent > MIN_CPU_PERCENT) and not stop_requested:
                         try:
                             proc.terminate()
                             textbox.insert("end", f"❌ Closed: {name} | RAM: {ram_mb:.1f} MB | CPU: {cpu_percent:.1f}%\n")
@@ -161,6 +161,7 @@ def use_deck(i, button):
     for app_name in safe_apps:
         textbox.insert("end", f" • {app_name}\n")
     textbox.see("end")
+    print(data)
 
     button.configure(
         text="Stop ?",
