@@ -240,14 +240,68 @@ def clear_all_decks():
 
     print(data)
 
+def remove_from_deck():
+    deck_name = deck_entry.get().strip()  # deck to modify
+    apps_raw = apps_entry.get().strip()   # reuse the same entry for removal
+
+    if not deck_name or not apps_raw:
+        textbox.insert("end", "⚠️ Enter deck name and apps to remove.\n")
+        textbox.see("end")
+        return
+
+    apps_to_remove = [app.strip() for app in apps_raw.split(',')]
+
+    # Load current decks
+    try:
+        with open("decks.json", "r") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError):
+        textbox.insert("end", "⚠️ No decks found.\n")
+        textbox.see("end")
+        return
+
+    if deck_name not in data:
+        textbox.insert("end", f"⚠️ Deck '{deck_name}' does not exist.\n")
+        textbox.see("end")
+        return
+
+    # Remove apps
+    data[deck_name] = [app for app in data[deck_name] if app not in apps_to_remove]
+
+    with open("decks.json", "w") as f:
+        json.dump(data, f, indent=2)
+
+    textbox.insert("end", f"🗑️ Removed {apps_to_remove} from '{deck_name}'.\n")
+    textbox.insert("end", f"Current apps: {data[deck_name]}\n")
+    textbox.see("end")
+
+    # Optionally clear the input after removal
+    apps_entry.delete(0, "end")
 
 
 
-save_button = ctk.CTkButton(app, text="Save Deck", command=save_deck)
-save_button.pack(pady=10)
+
+
+action_row = ctk.CTkFrame(app, fg_color="gray25")
+action_row.pack(pady=10)
+
+save_button = ctk.CTkButton(action_row, text="Save Deck", command=save_deck)
+save_button.pack(side="left", padx=5)
+
+remove_button = ctk.CTkButton(action_row, text="Remove Apps", command=remove_from_deck)
+remove_button.pack(side="left", padx=5)
+
+clear_button = ctk.CTkButton(action_row, text="Clear All Decks", command=clear_all_decks)
+clear_button.pack(side="left", padx=5)
+
+
+
+deck_label = ctk.CTkLabel(app, text="Decks:", font=("Arial", 16))
+deck_label.pack(pady=(10, 0))  # small padding above and no extra below
+
 
 button_row = ctk.CTkFrame(app, fg_color="gray20")
-button_row.pack(pady=20)
+button_row.pack(pady=5)  # slightly smaller padding since label above
 
 
 deck_one = ctk.CTkButton(button_row, text="Deck 1", command=lambda: use_deck(0,deck_one))
@@ -276,8 +330,6 @@ for i, button in enumerate(buttons):
         button.configure(text="")
 
 
-save_button = ctk.CTkButton(app, text="clear_all_decks", command=clear_all_decks)
-save_button.pack(pady=10)
 
 # Create the Start button
 # button = ctk.CTkButton(

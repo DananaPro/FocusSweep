@@ -70,8 +70,17 @@ def save_deck():
     deck_entry.delete(0, "end")
     apps_entry.delete(0, "end")
 
-save_button = ctk.CTkButton(app, text="Save Deck", command=save_deck)
-save_button.pack(pady=10)
+action_row = ctk.CTkFrame(app, fg_color="gray25")
+action_row.pack(pady=10)
+
+save_button = ctk.CTkButton(action_row, text="Save Deck")
+save_button.pack(side="left", padx=5)
+
+remove_button = ctk.CTkButton(action_row, text="Remove Apps")
+remove_button.pack(side="left", padx=5)
+
+clear_button = ctk.CTkButton(action_row, text="Clear All Decks")
+clear_button.pack(side="left", padx=5)
 
 button_row = ctk.CTkFrame(app, fg_color="gray20")  # or any hex code like "#222222"
 button_row.pack(pady=20)
