@@ -45,7 +45,7 @@ system_whitelist = [
     "audiodg.exe",
 
     # Script tools
-    "python.exe", "cmd.exe", "powershell.exe", "py.exe","Focus Sweep",
+    "python.exe", "cmd.exe", "powershell.exe", "py.exe","Focus Sweep","GitExtensions","Git Extensions",
 
      # Extras
      "SignalRPG.exe", "WallpaperAlive.exe", "SignalRgb.exe",
@@ -63,34 +63,38 @@ current_pid = os.getpid()
 stop_requested = False
 
 safe_apps_lower = set()
+def normalize(name):
+    if not name:
+        return ""
+    name = name.lower().replace(" ", "")
+    if not name.endswith(".exe"):
+        name += ".exe"
+    return name
+
 def focus_sweep_loop():
-    try:
-        while not stop_requested:
-            for proc in psutil.process_iter(['pid', 'name', 'memory_info', 'cpu_percent']):
-                try:
-                    if proc.pid == current_pid:
-                        continue
-                    name = proc.info['name']
-                    if name is None:
-                        continue
-                    if name.lower() in safe_apps_lower:
-                        continue
-                    ram_mb = proc.info['memory_info'].rss / (1024 * 1024)
-                    cpu_percent = proc.cpu_percent(interval=0.1)
-                    if (ram_mb > MIN_RAM_MB or cpu_percent > MIN_CPU_PERCENT) and not stop_requested:
-                        try:
-                            proc.terminate()
-                            textbox.insert("end", f"❌ Closed: {name} | RAM: {ram_mb:.1f} MB | CPU: {cpu_percent:.1f}%\n")
-                            textbox.see("end")
-                        except (psutil.NoSuchProcess, psutil.AccessDenied):
-                            pass
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
+    global stop_requested
+    while not stop_requested:
+        for proc in psutil.process_iter(['pid', 'name', 'memory_info', 'cpu_percent']):
+            try:
+                if proc.pid == current_pid:
+                    continue  # never kill self
+                proc_name = normalize(proc.info['name'])
+                if proc_name in safe_apps_lower:
                     continue
-            time.sleep(CHECK_INTERVAL)
-    except KeyboardInterrupt:
-        print("\n🛑 Focus mode stopped by user. Exiting...")
 
+                ram_mb = proc.info['memory_info'].rss / (1024*1024)
+                cpu_percent = proc.cpu_percent(interval=0.1)
 
+                if ram_mb > MIN_RAM_MB or cpu_percent > MIN_CPU_PERCENT:
+                    try:
+                        proc.terminate()
+                        textbox.insert("end", f"❌ Closed: {proc.info['name']} | RAM: {ram_mb:.1f} MB | CPU: {cpu_percent:.1f}%\n")
+                        textbox.see("end")
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        time.sleep(CHECK_INTERVAL)
 
 
 label1 = ctk.CTkLabel(app, text="Enter deck name:", font=("Arial", 14))
@@ -108,66 +112,50 @@ apps_entry.pack(pady=5)
 textbox = ctk.CTkTextbox(app, width=350, height=150)
 textbox.pack(pady=10)
 
-active_deck_index  = None  # Flag to track state
+active_deck_index  = None  # Flag to track state    
 
 
 def use_deck(i, button):
     global active_deck_index, safe_apps_lower, stop_requested
-    
-    with open("decks.json", "r") as f:
-        data = json.load(f)
-    deck_names = list(data.keys())
 
+    try:
+        with open("decks.json", "r") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError):
+        data = {}
+
+    deck_names = list(data.keys())
     if i >= len(deck_names):
-        # No deck saved for this button index
         textbox.insert("end", f"⚠️ No deck found for deck {i+1}.\n")
         textbox.see("end")
         return
-    
-    try:
-        apps = data[deck_names[i]]
-    except IndexError:
-        apps = []
 
-    
-
+    # Stop if already active
     if active_deck_index == i:
-        # Stop current active deck
         stop_requested = True
         active_deck_index = None
-        button.configure(
-            text="Start",
-            text_color="black",
-            hover_color="green"
-        )
+        button.configure(text="Start", text_color="black", hover_color="green")
         textbox.insert("end", "🛑 Focus Sweep stopped.\n")
         textbox.see("end")
         return
 
-    # If another deck was active, you might want to reset its button here
-
     # Start new deck
     stop_requested = False
-    apps = data[deck_names[i]]
-    allowed_apps = [app.strip().lower() + ".exe" for app in apps]
-    safe_apps = set(allowed_apps + system_whitelist)
-    safe_apps_lower = set(app.lower() for app in safe_apps)
+    active_deck_index = i
 
-    active_deck_index = i  # Set active deck to current
+    # Normalize apps in the deck
+    allowed_apps = [normalize(app) for app in data[deck_names[i]] if app.strip()]
+    # Merge with system whitelist
+    safe_apps_lower = set(normalize(app) for app in allowed_apps + system_whitelist)
 
     threading.Thread(target=focus_sweep_loop, daemon=True).start()
 
     textbox.insert("end", "🧹 Focus Sweep started!\n")
-    for app_name in safe_apps:
+    for app_name in sorted(safe_apps_lower):
         textbox.insert("end", f" • {app_name}\n")
     textbox.see("end")
-    print(data)
 
-    button.configure(
-        text="Stop ?",
-        text_color="black",
-        hover_color="red"
-    )
+    button.configure(text="Stop ?", text_color="black", hover_color="red")
 
 
 
