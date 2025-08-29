@@ -5,6 +5,7 @@ import threading
 import customtkinter as ctk
 import ctypes
 import json
+import sys
 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(u"FocusSweepApp")
 
 
@@ -12,7 +13,17 @@ ctk.set_appearance_mode("dark")
 app = ctk.CTk()
 app.geometry("500x500")
 app.title("Focus Sweep")
-app.iconbitmap("logo.ico")  # ← your logo here!
+
+
+
+def resource_path(relative_path):
+    """Get absolute path to resource (works for dev and PyInstaller exe)."""
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
+
+app.iconbitmap(resource_path("icon.ico"))
+
  
 
 # ------------------------------
