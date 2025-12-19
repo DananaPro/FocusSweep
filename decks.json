@@ -1,13 +1,25 @@
 {
   "math": [
-    "adobe acrobat",
-    "adobe",
-    "steamwebhelper",
-    "calculatorapp",
-    "spotify",
-    "Acrobat",
+    "perfwatson2.exe",
     "calculator",
+    "servicehub.vsdetouredhost.exe",
+    "spotify",
     "OneDrive",
-    "opera"
+    "opera",
+    "copilot-language-server.exe",
+    "microsoft.servicehub.exe",
+    "servicehub.host.dotnet.x64.exe",
+    "steamwebhelper",
+    "Acrobat",
+    "git.exe",
+    "calculatorapp",
+    "adobe",
+    "adobe acrobat",
+    "microsoft.servicehub.controller.exe",
+    "servicehub.indexingservice.exe",
+    "servicehub.threadedwaitdialog.exe",
+    "devenv.exe",
+    "servicehub.identityhost.exe",
+    "servicehub.roslyncodeanalysisservice.exe"
   ]
 }

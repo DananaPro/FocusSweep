@@ -6,15 +6,14 @@ import customtkinter as ctk
 import ctypes
 import json
 import sys
+
 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(u"FocusSweepApp")
 
-
+# -------------------- App Setup --------------------
 ctk.set_appearance_mode("dark")
 app = ctk.CTk()
 app.geometry("500x500")
 app.title("Focus Sweep")
-
-
 
 def resource_path(relative_path):
     """Get absolute path to resource (works for dev and PyInstaller exe)."""
@@ -24,322 +23,255 @@ def resource_path(relative_path):
 
 app.iconbitmap(resource_path("icon.ico"))
 
- 
+# -------------------- Thresholds --------------------
+MIN_RAM_MB = 80
+MIN_CPU_PERCENT = 3.0
+CHECK_INTERVAL = 5
 
-# ------------------------------
-# 1. Customize thresholds
-# ------------------------------
-MIN_RAM_MB = 80         # RAM threshold
-MIN_CPU_PERCENT = 3.0   # CPU usage threshold
-CHECK_INTERVAL = 5      # seconds between scans
-
-
-# ------------------------------
-# 3. System/process whitelist
-# ------------------------------
+# -------------------- Whitelist --------------------
 system_whitelist = [
-    # Core Windows
     "System", "System Idle Process", "wininit.exe", "winlogon.exe",
     "services.exe", "lsass.exe", "csrss.exe", "smss.exe","SystemSettings",
-
-    # Shell & UI
     "explorer.exe", "svchost.exe", "sihost.exe", "StartMenuExperienceHost.exe",
     "ShellExperienceHost.exe", "SearchHost.exe", "TextInputHost.exe",
     "fontdrvhost.exe", "RuntimeBroker.exe", "dwm.exe", "conhost.exe",
-    "taskhostw.exe",
-
-    # Security
-    "SecurityHealthService.exe", "SecurityHealthSystray.exe", "MsMpEng.exe",
-    "wmiPrvSE.exe", "WerFault.exe",
-
-    # Audio & Background
-    "audiodg.exe",
-
-    # Script tools
-    "python.exe", "cmd.exe", "powershell.exe", "py.exe","Focus Sweep","GitExtensions","Git Extensions",
-
-     # Extras
-     "SignalRPG.exe", "WallpaperAlive.exe", "SignalRgb.exe",
-
-    # # Cloud tools
-    # "OneDrive.exe", "steam.exe", "steamwebhelper.exe",
-
-    # # Development tools
-     "Code.exe"
+    "taskhostw.exe", "SecurityHealthService.exe", "SecurityHealthSystray.exe",
+    "MsMpEng.exe", "wmiPrvSE.exe", "WerFault.exe", "audiodg.exe",
+    "python.exe", "cmd.exe", "powershell.exe", "py.exe","Focus Sweep",
+    "GitExtensions","Git Extensions", "SignalRPG.exe", "WallpaperAlive.exe",
+    "SignalRgb.exe", "Code.exe"
 ]
 
-
-# Get current script's process ID to avoid closing itself
 current_pid = os.getpid()
-stop_requested = False
-
+stop_event = threading.Event()
+sweep_thread = None
 safe_apps_lower = set()
+active_deck_name = None
+
 def normalize(name):
     if not name:
         return ""
-    name = name.lower().replace(" ", "")
-    if not name.endswith(".exe"):
-        name += ".exe"
-    return name
+    name = name.strip().lower()
+    return name if name.endswith(".exe") else f"{name}.exe"
 
+# -------------------- Focus Sweep Loop --------------------
 def focus_sweep_loop():
-    global stop_requested
-    while not stop_requested:
-        for proc in psutil.process_iter(['pid', 'name', 'memory_info', 'cpu_percent']):
+    while not stop_event.is_set():
+        for proc in psutil.process_iter(['pid', 'name', 'memory_info']):
             try:
                 if proc.pid == current_pid:
-                    continue  # never kill self
+                    continue
                 proc_name = normalize(proc.info['name'])
                 if proc_name in safe_apps_lower:
                     continue
-
                 ram_mb = proc.info['memory_info'].rss / (1024*1024)
-                cpu_percent = proc.cpu_percent(interval=0.1)
-
+                cpu_percent = proc.cpu_percent(None)
                 if ram_mb > MIN_RAM_MB or cpu_percent > MIN_CPU_PERCENT:
                     try:
                         proc.terminate()
-                        textbox.insert("end", f"❌ Closed: {proc.info['name']} | RAM: {ram_mb:.1f} MB | CPU: {cpu_percent:.1f}%\n")
-                        textbox.see("end")
+                        log_message(f"❌ Closed: {proc.info['name']} | RAM: {ram_mb:.1f} MB | CPU: {cpu_percent:.1f}%")
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         continue
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
         time.sleep(CHECK_INTERVAL)
 
+def log_message(msg):
+    app.after(0, lambda: (textbox.insert("end", msg + "\n"), textbox.see("end")))
 
-label1 = ctk.CTkLabel(app, text="Enter deck name:", font=("Arial", 14))
-label1.pack(pady=(10, 0))
-
-deck_entry = ctk.CTkEntry(app, width=300)
-deck_entry.pack(pady=5)
-
-label2 = ctk.CTkLabel(app, text="Enter apps (comma separated):", font=("Arial", 14))
-label2.pack(pady=(10, 0))
-
-apps_entry = ctk.CTkEntry(app, width=300)
-apps_entry.pack(pady=5)
-
-textbox = ctk.CTkTextbox(app, width=350, height=150)
-textbox.pack(pady=10)
-
-active_deck_index  = None  # Flag to track state    
-
-
-def use_deck(i, button):
-    global active_deck_index, safe_apps_lower, stop_requested
-
+# -------------------- Deck Management --------------------
+def read_decks():
     try:
         with open("decks.json", "r") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, FileNotFoundError):
-        data = {}
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
 
-    deck_names = list(data.keys())
-    if i >= len(deck_names):
-        textbox.insert("end", f"⚠️ No deck found for deck {i+1}.\n")
-        textbox.see("end")
-        return
+def write_decks(data):
+    with open("decks.json", "w") as f:
+        json.dump(data, f, indent=2)
 
-    # Stop if already active
-    if active_deck_index == i:
-        stop_requested = True
-        active_deck_index = None
-        button.configure(text="Start", text_color="black", hover_color="green")
-        textbox.insert("end", "🛑 Focus Sweep stopped.\n")
-        textbox.see("end")
-        return
-
-    # Start new deck
-    stop_requested = False
-    active_deck_index = i
-
-    # Normalize apps in the deck
-    allowed_apps = [normalize(app) for app in data[deck_names[i]] if app.strip()]
-    # Merge with system whitelist
-    safe_apps_lower = set(normalize(app) for app in allowed_apps + system_whitelist)
-
-    threading.Thread(target=focus_sweep_loop, daemon=True).start()
-
-    textbox.insert("end", "🧹 Focus Sweep started!\n")
-    for app_name in sorted(safe_apps_lower):
-        textbox.insert("end", f" • {app_name}\n")
-    textbox.see("end")
-
-    button.configure(text="Stop ?", text_color="black", hover_color="red")
-
-
-
-global buttons
+def load_decks():
+    return read_decks()
 
 def save_deck():
     deck_name = deck_entry.get().strip()
     apps_raw = apps_entry.get().strip()
     if not deck_name or not apps_raw:
-        textbox.insert("end", "⚠️ Please enter deck name and at least one app.\n")
-        textbox.see("end")
+        log_message("⚠️ Please enter deck name and at least one app.")
         return
-
-    apps_list = [app.strip() for app in apps_raw.split(',')]
-
-    # Load existing decks or start fresh
-    try:
-        with open("decks.json", "r") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, FileNotFoundError):
-        data = {}
-
-        # Load existing decks or start fresh
-    try:
-        with open("decks.json", "r") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, FileNotFoundError):
-        data = {}
-
-    # Update deck data (add or replace)
-    if deck_name in data:
-        data[deck_name].extend(apps_list)
-        data[deck_name] = list(set(data[deck_name]))  # Optional: remove duplicates
-    else:
-        data[deck_name] = apps_list
-
-    with open("decks.json", "w") as f:
-        json.dump(data, f, indent=2)
-
-    textbox.insert("end", f"✅ Deck '{deck_name}' saved.\n")
-    textbox.see("end")
-
-    # Update button texts to match deck names
-    buttons = [deck_one, deck_two, deck_three]
-    deck_names = list(data.keys())
-
-    for i, button in enumerate(buttons):
-        if i < len(deck_names):
-            button.configure(text=deck_names[i])
-        else:
-            button.configure(text="")  # clear extra buttons if fewer decks
-
-    # Clear inputs if you want
-    deck_entry.delete(0, "end")
-    apps_entry.delete(0, "end")
-    print(data)
-    
-def clear_all_decks():
-    with open("decks.json", "w") as f:
-        json.dump({}, f, indent=2)
-
-    with open("decks.json", "r") as f:
-        data = json.load(f)
-
-    textbox.insert("end", "🗑️ All decks deleted.\n")
-    textbox.see("end")
-
-    for button in [deck_one, deck_two, deck_three]:
-        button.configure(text="")
-
-    print(data)
+    apps_list = [normalize(app) for app in apps_raw.split(',')]
+    data = read_decks()
+    data.setdefault(deck_name, [])
+    data[deck_name].extend(apps_list)
+    data[deck_name] = list(set(data[deck_name]))
+    write_decks(data)
+    log_message(f"✅ Deck '{deck_name}' saved.")
+    refresh_deck_buttons_dynamic()  
 
 def remove_from_deck():
-    deck_name = deck_entry.get().strip()  # deck to modify
-    apps_raw = apps_entry.get().strip()   # reuse the same entry for removal
-
+    deck_name = deck_entry.get().strip()
+    apps_raw = apps_entry.get().strip()
     if not deck_name or not apps_raw:
-        textbox.insert("end", "⚠️ Enter deck name and apps to remove.\n")
-        textbox.see("end")
+        log_message("⚠️ Enter deck name and apps to remove.")
         return
-
-    apps_to_remove = [app.strip() for app in apps_raw.split(',')]
-
-    # Load current decks
-    try:
-        with open("decks.json", "r") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, FileNotFoundError):
-        textbox.insert("end", "⚠️ No decks found.\n")
-        textbox.see("end")
-        return
-
+    apps_to_remove = [normalize(app) for app in apps_raw.split(',')]
+    data = read_decks()
     if deck_name not in data:
-        textbox.insert("end", f"⚠️ Deck '{deck_name}' does not exist.\n")
-        textbox.see("end")
+        log_message(f"⚠️ Deck '{deck_name}' does not exist.")
         return
-
-    # Remove apps
     data[deck_name] = [app for app in data[deck_name] if app not in apps_to_remove]
-
-    with open("decks.json", "w") as f:
-        json.dump(data, f, indent=2)
-
-    textbox.insert("end", f"🗑️ Removed {apps_to_remove} from '{deck_name}'.\n")
-    textbox.insert("end", f"Current apps: {data[deck_name]}\n")
-    textbox.see("end")
-
-    # Optionally clear the input after removal
+    write_decks(data)
+    log_message(f"🗑️ Removed {apps_to_remove} from '{deck_name}'. Current apps: {data[deck_name]}")
     apps_entry.delete(0, "end")
+    refresh_deck_buttons_dynamic()
+    
+def clear_all_decks():
+    write_decks({})
+    log_message("🗑️ All decks deleted.")
+    for button in deck_buttons:
+        button.configure(text="")
+    refresh_deck_buttons_dynamic()  
+
+def refresh_deck_buttons_dynamic():
+    global deck_buttons
+    data = load_decks()
+    deck_names = list(data.keys())
+
+    # Clear old buttons
+    for btn in deck_buttons:
+        btn.destroy()
+    deck_buttons = []
+
+    # Place buttons in grid: 3 per row
+    for i, name in enumerate(deck_names):
+        btn = ctk.CTkButton(
+            button_row,
+            text=name,
+            command=lambda i=i: use_deck_by_index(i),
+            width=100
+        )
+        row = i // 3
+        col = i % 3
+        if i < 3 or extra_visible:  # show first 3 always, extras only if toggled
+            btn.grid(row=row, column=col, padx=5, pady=5)
+        deck_buttons.append(btn)
+
+    update_deck_buttons()
+
+    # Update hover colors
+    update_deck_buttons()
 
 
 
+# -------------------- Sweep Control --------------------
+def stop_sweep():
+    global sweep_thread, active_deck_name
+    if sweep_thread and sweep_thread.is_alive():
+        stop_event.set()
+        sweep_thread.join()
+        sweep_thread = None
+        log_message("🛑 Focus Sweep stopped.")
+    active_deck_name = None
+    stop_event.clear()
+    update_deck_buttons()
+
+def start_sweep(deck_name):
+    global sweep_thread, active_deck_name, safe_apps_lower
+    stop_sweep()
+    data = load_decks()
+    if deck_name not in data:
+        log_message(f"⚠️ Deck '{deck_name}' not found.")
+        return
+    active_deck_name = deck_name
+    allowed_apps = data[deck_name]
+    safe_apps_lower = set(normalize(app) for app in allowed_apps + system_whitelist)
+    # Prime CPU
+    for proc in psutil.process_iter(['pid', 'name']):
+        try: proc.cpu_percent(None)
+        except (psutil.NoSuchProcess, psutil.AccessDenied): continue
+    sweep_thread = threading.Thread(target=focus_sweep_loop, daemon=True)
+    sweep_thread.start()
+    log_message(f"🧹 Focus Sweep started: {deck_name}")
+    update_deck_buttons()
+
+def use_deck_by_name(deck_name, button):
+    if not deck_name:
+        return
+    if active_deck_name == deck_name:
+        stop_sweep()
+    else:
+        start_sweep(deck_name)
+
+def update_deck_buttons():
+    for b in deck_buttons:
+        b.configure(hover_color="red" if b.cget("text") == active_deck_name else "green")
+
+        
+# -------------------- Dynamic Deck Buttons --------------------
+deck_buttons = []  # all deck buttons
+extra_visible = False  # tracks if extra decks are visible
 
 
+# Wrapper for deck buttons
+def use_deck_by_index(i):
+    data = load_decks()
+    deck_names = list(data.keys())
+    if i >= len(deck_names):
+        log_message(f"⚠️ Deck {i+1} does not exist.")
+        return
+    use_deck_by_name(deck_names[i], deck_buttons[i])
+
+# Button to show/hide extra decks
+def toggle_extra_decks():
+    global extra_visible
+    extra_visible = not extra_visible
+    toggle_button.configure(text="Hide Extra Decks" if extra_visible else "Show More Decks")
+    refresh_deck_buttons_dynamic()
+
+# -------------------- UI --------------------
+# -------------------- Decks Section --------------------
+deck_label = ctk.CTkLabel(app, text="Decks:", font=("Arial", 16))
+deck_label.pack(pady=(10, 0))
+
+# Frame to hold all deck buttons
+button_row = ctk.CTkFrame(app, fg_color="gray20")
+button_row.pack(pady=5)
+
+# Button to show/hide extra decks
+toggle_button = ctk.CTkButton(app, text="Show More Decks", command=toggle_extra_decks)
+toggle_button.pack(pady=5)
+
+# List to store all dynamically created deck buttons
+deck_buttons = []
+
+# Initially populate first 3 deck buttons
+
+
+# -------------------- Deck Inputs Section --------------------
+label1 = ctk.CTkLabel(app, text="Enter deck name:", font=("Arial", 14))
+label1.pack(pady=(10, 0))
+deck_entry = ctk.CTkEntry(app, width=300)
+deck_entry.pack(pady=5)
+
+label2 = ctk.CTkLabel(app, text="Enter apps (comma separated):", font=("Arial", 14))
+label2.pack(pady=(10, 0))
+apps_entry = ctk.CTkEntry(app, width=300)
+apps_entry.pack(pady=5)
+
+
+# -------------------- Log Textbox --------------------
+textbox = ctk.CTkTextbox(app, width=350, height=150)
+textbox.pack(pady=10)
+
+
+# -------------------- Action Buttons --------------------
 action_row = ctk.CTkFrame(app, fg_color="gray25")
 action_row.pack(pady=10)
-
-save_button = ctk.CTkButton(action_row, text="Save Deck", command=save_deck)
-save_button.pack(side="left", padx=5)
-
-remove_button = ctk.CTkButton(action_row, text="Remove Apps", command=remove_from_deck)
-remove_button.pack(side="left", padx=5)
-
-clear_button = ctk.CTkButton(action_row, text="Clear All Decks", command=clear_all_decks)
-clear_button.pack(side="left", padx=5)
+ctk.CTkButton(action_row, text="Save Deck", command=save_deck).pack(side="left", padx=5)
+ctk.CTkButton(action_row, text="Remove Apps", command=remove_from_deck).pack(side="left", padx=5)
+ctk.CTkButton(action_row, text="Clear All Decks", command=clear_all_decks).pack(side="left", padx=5)
 
 
-
-deck_label = ctk.CTkLabel(app, text="Decks:", font=("Arial", 16))
-deck_label.pack(pady=(10, 0))  # small padding above and no extra below
-
-
-button_row = ctk.CTkFrame(app, fg_color="gray20")
-button_row.pack(pady=5)  # slightly smaller padding since label above
-
-
-deck_one = ctk.CTkButton(button_row, text="Deck 1", command=lambda: use_deck(0,deck_one))
-deck_one.pack(side="left", padx=10)
-
-deck_two = ctk.CTkButton(button_row, text="Deck 2", command=lambda: use_deck(1,deck_two))
-deck_two.pack(side="left", padx=10)
-
-deck_three = ctk.CTkButton(button_row, text="Deck 3", command=lambda: use_deck(2,deck_three))
-deck_three.pack(side="left", padx=10)
-
-
-try:
-    with open("decks.json", "r") as f:
-        data = json.load(f)
-except (json.JSONDecodeError, FileNotFoundError):
-    data = {}
-
-buttons = [deck_one, deck_two, deck_three]
-deck_names = list(data.keys())
-
-for i, button in enumerate(buttons):
-    if i < len(deck_names):
-        button.configure(text=deck_names[i])
-    else:
-        button.configure(text="")
-
-
-
-# Create the Start button
-# button = ctk.CTkButton(
-#     app,
-#     text="Start",
-#     command=start_button,
-#     text_color="black",    # Default text black
-#     hover_color="green"      # Hover green for "Start" state
-# )
-# button.pack(pady=10)
-
-
-
+refresh_deck_buttons_dynamic()  # populate buttons on startup
 app.mainloop()
