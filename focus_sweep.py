@@ -6,6 +6,7 @@ import customtkinter as ctk
 import ctypes
 import json
 import sys
+from PIL import Image, ImageTk  # Make sure pillow is installed
 
 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(u"FocusSweepApp")
 
@@ -15,21 +16,27 @@ app = ctk.CTk()
 app.geometry("500x550")
 app.title("Focus Sweep")
 
+# -------------------- Helper for PyInstaller --------------------
 def resource_path(relative_path):
-    """Get absolute path to resource (works for dev and PyInstaller exe)."""
-    if hasattr(sys, "_MEIPASS"):
+    """
+    Returns the absolute path to resources, works for dev & PyInstaller.
+    """
+    if hasattr(sys, "_MEIPASS"):  # PyInstaller bundle folder
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
 
-try:
-    app.iconbitmap(resource_path("icon.ico"))
-except Exception:
-    pass
+# -------------------- Set App Icon --------------------
+icon_file = resource_path("icon.ico")  # your ICO file
+if os.path.exists(icon_file):
+    try:
+        app.iconbitmap(icon_file)
+    except Exception as e:
+        print(f"Failed to set icon: {e}")
+else:
+    print("Icon file not found:", icon_file)
 
-# Path in user's AppData
+# -------------------- AppData Path --------------------
 DECKS_PATH = os.path.join(os.getenv('APPDATA'), 'FocusSweep', 'decks.json')
-
-# Make sure the folder exists
 os.makedirs(os.path.dirname(DECKS_PATH), exist_ok=True)
 
 def ensure_decks_file():
@@ -38,6 +45,7 @@ def ensure_decks_file():
             json.dump({}, f, indent=2)
 
 ensure_decks_file()
+
 # -------------------- Declarations------------------
 deck_buttons = []
 extra_visible = False
@@ -320,8 +328,8 @@ ctk.CTkButton(action_row, text="Remove Apps", command=remove_from_deck).pack(sid
 ctk.CTkButton(action_row, text="Clear All Decks", command=clear_all_decks).pack(side="left", padx=5)
 
 # -------------------- Version --------------------
-APP_VERSION = "v1.1.1"
-version_label = ctk.CTkLabel(app, text=f"Focus Sweep {APP_VERSION}", font=("Arial", 14))
+APP_VERSION = "v1.1.3"
+version_label = ctk.CTkLabel(app, text=f"Focus Sweep {APP_VERSION}", font=("Arial", 14), text_color="red")
 version_label.pack(pady=(5, 5))
 
 refresh_deck_buttons_dynamic()  # populate buttons on startup
