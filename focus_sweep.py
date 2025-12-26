@@ -26,7 +26,11 @@ try:
 except Exception:
     pass
 
-DECKS_PATH = "decks.json"
+# Path in user's AppData
+DECKS_PATH = os.path.join(os.getenv('APPDATA'), 'FocusSweep', 'decks.json')
+
+# Make sure the folder exists
+os.makedirs(os.path.dirname(DECKS_PATH), exist_ok=True)
 
 def ensure_decks_file():
     if not os.path.exists(DECKS_PATH):
@@ -34,8 +38,9 @@ def ensure_decks_file():
             json.dump({}, f, indent=2)
 
 ensure_decks_file()
-
-
+# -------------------- Declarations------------------
+deck_buttons = []
+extra_visible = False
 # -------------------- Thresholds --------------------
 MIN_RAM_MB = 80
 MIN_CPU_PERCENT = 3.0
@@ -95,13 +100,13 @@ def log_message(msg):
 # -------------------- Deck Management --------------------
 def read_decks():
     try:
-        with open("decks.json", "r") as f:
+        with open(DECKS_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
 def write_decks(data):
-    with open("decks.json", "w") as f:
+    with open(DECKS_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
 def load_decks():
@@ -110,17 +115,28 @@ def load_decks():
 def save_deck():
     deck_name = deck_entry.get().strip()
     apps_raw = apps_entry.get().strip()
-    if not deck_name or not apps_raw:
-        log_message("⚠️ Please enter deck name and at least one app.")
+    
+    # Clean up apps list
+    apps_list = [normalize(app) for app in apps_raw.split(',') if app.strip()]
+    
+    if not deck_name or not apps_list:
+        log_message("⚠️ Please enter deck name and at least one valid app.")
         return
-    apps_list = [normalize(app) for app in apps_raw.split(',')]
+    
     data = read_decks()
     data.setdefault(deck_name, [])
     data[deck_name].extend(apps_list)
+    
+    # Remove duplicates and remove deck if it ends up empty
     data[deck_name] = list(set(data[deck_name]))
+    if not data[deck_name]:
+        data.pop(deck_name, None)
+        log_message(f"⚠️ Deck '{deck_name}' is empty and was not saved.")
+    else:
+        log_message(f"✅ Deck '{deck_name}' saved.")
+    
     write_decks(data)
-    log_message(f"✅ Deck '{deck_name}' saved.")
-    refresh_deck_buttons_dynamic()  
+    refresh_deck_buttons_dynamic()
 
 def remove_from_deck():
     deck_name = deck_entry.get().strip()
@@ -133,48 +149,68 @@ def remove_from_deck():
     if deck_name not in data:
         log_message(f"⚠️ Deck '{deck_name}' does not exist.")
         return
+    # Remove apps
     data[deck_name] = [app for app in data[deck_name] if app not in apps_to_remove]
+    
+    # Auto-delete empty deck
+    if not data[deck_name]:
+        del data[deck_name]
+        log_message(f"🗑️ Deck '{deck_name}' is now empty and has been deleted.")
+    else:
+        log_message(f"🗑️ Removed {apps_to_remove} from '{deck_name}'. Current apps: {data[deck_name]}")
+    
     write_decks(data)
-    log_message(f"🗑️ Removed {apps_to_remove} from '{deck_name}'. Current apps: {data[deck_name]}")
     apps_entry.delete(0, "end")
     refresh_deck_buttons_dynamic()
+
     
 def clear_all_decks():
-    write_decks({})
+    write_decks({})  # remove all decks from file
     log_message("🗑️ All decks deleted.")
+    
+    # Destroy all existing buttons
+    global deck_buttons
     for button in deck_buttons:
-        button.configure(text="")
-    refresh_deck_buttons_dynamic()  
+        button.destroy()
+    deck_buttons = []
+    
+    # Reset active deck and safe apps
+    global active_deck_name, safe_apps_lower
+    active_deck_name = None
+    safe_apps_lower = set()
+    
+    # Reset extra decks toggle
+    global extra_visible
+    extra_visible = False
+    toggle_button.configure(text="Show More Decks")
 
 def refresh_deck_buttons_dynamic():
     global deck_buttons
     data = load_decks()
     deck_names = list(data.keys())
 
-    # Clear old buttons
+    # Destroy old buttons
     for btn in deck_buttons:
         btn.destroy()
     deck_buttons = []
 
-    # Place buttons in grid: 3 per row
     for i, name in enumerate(deck_names):
+        # Skip creating button if deck is empty (extra safety)
+        if not data.get(name):
+            continue
+        
         btn = ctk.CTkButton(
             button_row,
             text=name,
             command=lambda i=i: use_deck_by_index(i),
             width=100
         )
-        row = i // 3
-        col = i % 3
-        if i < 3 or extra_visible:  # show first 3 always, extras only if toggled
+        row, col = i // 3, i % 3
+        if i < 3 or extra_visible:
             btn.grid(row=row, column=col, padx=5, pady=5)
         deck_buttons.append(btn)
 
     update_deck_buttons()
-
-    # Update hover colors
-    update_deck_buttons()
-
 
 
 # -------------------- Sweep Control --------------------
@@ -222,7 +258,6 @@ def update_deck_buttons():
 
         
 # -------------------- Dynamic Deck Buttons --------------------
-deck_buttons = []  # all deck buttons
 extra_visible = False  # tracks if extra decks are visible
 
 
@@ -230,7 +265,7 @@ extra_visible = False  # tracks if extra decks are visible
 def use_deck_by_index(i):
     data = load_decks()
     deck_names = list(data.keys())
-    if i >= len(deck_names):
+    if i >= len(deck_names) or i >= len(deck_buttons):
         log_message(f"⚠️ Deck {i+1} does not exist.")
         return
     use_deck_by_name(deck_names[i], deck_buttons[i])
@@ -241,6 +276,7 @@ def toggle_extra_decks():
     extra_visible = not extra_visible
     toggle_button.configure(text="Hide Extra Decks" if extra_visible else "Show More Decks")
     refresh_deck_buttons_dynamic()
+
 
 # -------------------- UI --------------------
 # -------------------- Decks Section --------------------
@@ -255,8 +291,6 @@ button_row.pack(pady=5)
 toggle_button = ctk.CTkButton(app, text="Show More Decks", command=toggle_extra_decks)
 toggle_button.pack(pady=5)
 
-# List to store all dynamically created deck buttons
-deck_buttons = []
 
 # Initially populate first 3 deck buttons
 

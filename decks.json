@@ -1,25 +1,13 @@
 {
   "math": [
-    "perfwatson2.exe",
+    "adobe acrobat",
     "calculator",
-    "servicehub.vsdetouredhost.exe",
-    "spotify",
-    "OneDrive",
+    "calculatorapp",
     "opera",
-    "copilot-language-server.exe",
-    "microsoft.servicehub.exe",
-    "servicehub.host.dotnet.x64.exe",
+    "OneDrive",
+    "spotify",
     "steamwebhelper",
     "Acrobat",
-    "git.exe",
-    "calculatorapp",
-    "adobe",
-    "adobe acrobat",
-    "microsoft.servicehub.controller.exe",
-    "servicehub.indexingservice.exe",
-    "servicehub.threadedwaitdialog.exe",
-    "devenv.exe",
-    "servicehub.identityhost.exe",
-    "servicehub.roslyncodeanalysisservice.exe"
+    "adobe"
   ]
 }
