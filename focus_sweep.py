@@ -21,7 +21,20 @@ def resource_path(relative_path):
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
 
-app.iconbitmap(resource_path("icon.ico"))
+try:
+    app.iconbitmap(resource_path("icon.ico"))
+except Exception:
+    pass
+
+DECKS_PATH = "decks.json"
+
+def ensure_decks_file():
+    if not os.path.exists(DECKS_PATH):
+        with open(DECKS_PATH, "w", encoding="utf-8") as f:
+            json.dump({}, f, indent=2)
+
+ensure_decks_file()
+
 
 # -------------------- Thresholds --------------------
 MIN_RAM_MB = 80
