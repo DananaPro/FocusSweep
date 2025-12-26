@@ -12,7 +12,7 @@ ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(u"FocusSweepApp")
 # -------------------- App Setup --------------------
 ctk.set_appearance_mode("dark")
 app = ctk.CTk()
-app.geometry("500x500")
+app.geometry("500x550")
 app.title("Focus Sweep")
 
 def resource_path(relative_path):
@@ -319,6 +319,10 @@ ctk.CTkButton(action_row, text="Save Deck", command=save_deck).pack(side="left",
 ctk.CTkButton(action_row, text="Remove Apps", command=remove_from_deck).pack(side="left", padx=5)
 ctk.CTkButton(action_row, text="Clear All Decks", command=clear_all_decks).pack(side="left", padx=5)
 
+# -------------------- Version --------------------
+APP_VERSION = "v1.1.1"
+version_label = ctk.CTkLabel(app, text=f"Focus Sweep {APP_VERSION}", font=("Arial", 14))
+version_label.pack(pady=(5, 5))
 
 refresh_deck_buttons_dynamic()  # populate buttons on startup
 app.mainloop()
