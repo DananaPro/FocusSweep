@@ -54,6 +54,8 @@ extra_visible = False
 delete_mode = False
 shake_jobs = {}        # for after jobs
 shake_positions = {}   # original x positions of wrappers
+ACTION_BUTTON_COLOR = "#1f6aa5"  # or whatever your main buttons use
+
 # -------------------- Thresholds --------------------
 MIN_RAM_MB = 80
 MIN_CPU_PERCENT = 3.0
@@ -158,6 +160,8 @@ def save_deck():
 
     log_message(f"✅ Deck '{deck_name}' saved ({len(merged)} apps).")
     refresh_deck_buttons_dynamic()
+    apps_entry.delete(0, "end")  # clear after saving
+
 
 def remove_from_deck():
     deck_name = deck_entry.get().strip()
@@ -254,39 +258,30 @@ def refresh_deck_buttons_dynamic():
 
 # -------------------- Shake System --------------------
 def set_delete_mode_visual(active):
-    for btn, wrapper in deck_buttons:
-        if active:
-            btn.configure(fg_color="darkred", hover_color="red")
-            if wrapper.winfo_ismapped():
-                start_shake(wrapper)
+    for _, wrapper in deck_buttons:
+        if active and wrapper.winfo_ismapped():
+            start_shake(wrapper)
         else:
             stop_shake(wrapper)
-            btn.configure(fg_color="green", hover_color="green")
 
 def start_shake(wrapper):
-    if wrapper not in shake_positions:
-        wrapper.update_idletasks()
-        shake_positions[wrapper] = wrapper.winfo_x()
-    shake_step(wrapper, direction=1)
+    if wrapper in shake_jobs:
+        return
+    shake_jobs[wrapper] = app.after(0, lambda: shake_step(wrapper, 1))
 
 def shake_step(wrapper, direction):
     if not delete_mode or not wrapper.winfo_ismapped():
         stop_shake(wrapper)
         return
 
-    original_x = shake_positions.get(wrapper, 0)
-    offset = 3 * direction
-    # Move relative to original x without affecting y
-    wrapper.place(x=original_x + offset, y=wrapper.winfo_y())
-
-    shake_jobs[wrapper] = app.after(40, lambda: shake_step(wrapper, -direction))
+    offset = 4 * direction
+    wrapper.place(in_=button_row, x=wrapper.winfo_x() + offset, y=wrapper.winfo_y())
+    shake_jobs[wrapper] = app.after(50, lambda: shake_step(wrapper, -direction))
 
 def stop_shake(wrapper):
     job = shake_jobs.pop(wrapper, None)
     if job:
         app.after_cancel(job)
-    original_x = shake_positions.get(wrapper, 0)
-    wrapper.place(x=original_x, y=wrapper.winfo_y())
 
 # -------------------- Sweep Control --------------------
 def stop_sweep():
@@ -353,10 +348,28 @@ def use_deck_by_name(deck_name, button):
     else:
         start_sweep(deck_name)
 
-
 def update_deck_buttons():
-    for btn, wrapper in deck_buttons:
-        btn.configure(hover_color="red" if btn.cget("text") == active_deck_name else "green")
+    for btn, _ in deck_buttons:
+        name = btn.cget("text")
+
+        if delete_mode:
+            btn.configure(
+                fg_color="darkred",
+                hover_color="red"
+            )
+
+        elif name == active_deck_name:
+            btn.configure(
+                fg_color=ACTION_BUTTON_COLOR,  # same as Start/Stop buttons
+                hover_color="red"
+            )
+
+        else:
+            btn.configure(
+                fg_color="gray30",
+                hover_color="green"
+            )
+
 
 def toggle_delete_mode():
     global delete_mode
@@ -368,7 +381,8 @@ def toggle_delete_mode():
     else:
         log_message("❎ Delete mode cancelled.")
         delete_deck_button.configure(text="Delete Deck", fg_color="darkred")
-
+        
+    update_deck_buttons()
     set_delete_mode_visual(delete_mode)
 
         
