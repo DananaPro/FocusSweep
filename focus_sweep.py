@@ -7,13 +7,15 @@ import ctypes
 import json
 import sys
 from PIL import Image, ImageTk  # Make sure pillow is installed
+from tkinter import messagebox
+
 
 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(u"FocusSweepApp")
 
 # -------------------- App Setup --------------------
 ctk.set_appearance_mode("dark")
 app = ctk.CTk()
-app.geometry("500x550")
+app.geometry("500x580")
 app.title("Focus Sweep")
 
 # -------------------- Helper for PyInstaller --------------------
@@ -49,6 +51,9 @@ ensure_decks_file()
 # -------------------- Declarations------------------
 deck_buttons = []
 extra_visible = False
+delete_mode = False
+shake_jobs = {}        # for after jobs
+shake_positions = {}   # original x positions of wrappers
 # -------------------- Thresholds --------------------
 MIN_RAM_MB = 80
 MIN_CPU_PERCENT = 3.0
@@ -123,27 +128,35 @@ def load_decks():
 def save_deck():
     deck_name = deck_entry.get().strip()
     apps_raw = apps_entry.get().strip()
-    
-    # Clean up apps list
-    apps_list = [normalize(app) for app in apps_raw.split(',') if app.strip()]
-    
-    if not deck_name or not apps_list:
-        log_message("⚠️ Please enter deck name and at least one valid app.")
+
+    # Parse + normalize apps
+    apps_list = [normalize(app) for app in apps_raw.split(",") if app.strip()]
+
+    if not deck_name:
+        log_message("⚠️ Deck name is required.")
         return
-    
+
+    if not apps_list:
+        log_message("⚠️ Enter at least one valid app.")
+        return
+
     data = read_decks()
-    data.setdefault(deck_name, [])
-    data[deck_name].extend(apps_list)
-    
-    # Remove duplicates and remove deck if it ends up empty
-    data[deck_name] = list(set(data[deck_name]))
-    if not data[deck_name]:
-        data.pop(deck_name, None)
+
+    existing_apps = data.get(deck_name, [])
+
+    # Merge while preserving order and removing duplicates
+    merged = list(dict.fromkeys(existing_apps + apps_list))
+
+    if not merged:
         log_message(f"⚠️ Deck '{deck_name}' is empty and was not saved.")
-    else:
-        log_message(f"✅ Deck '{deck_name}' saved.")
-    
+        data.pop(deck_name, None)
+        write_decks(data)
+        return
+
+    data[deck_name] = merged
     write_decks(data)
+
+    log_message(f"✅ Deck '{deck_name}' saved ({len(merged)} apps).")
     refresh_deck_buttons_dynamic()
 
 def remove_from_deck():
@@ -173,53 +186,107 @@ def remove_from_deck():
 
     
 def clear_all_decks():
-    write_decks({})  # remove all decks from file
+    from tkinter import messagebox
+
+    confirm = messagebox.askyesno(
+        "Clear All Decks",
+        "This will permanently delete ALL decks.\n\nAre you sure?"
+    )
+    if not confirm:
+        return
+
+    write_decks({})
     log_message("🗑️ All decks deleted.")
-    
-    # Destroy all existing buttons
-    global deck_buttons
-    for button in deck_buttons:
-        button.destroy()
+
+    global deck_buttons, active_deck_name, safe_apps_lower, extra_visible
+    for btn, wrapper in deck_buttons:
+        btn.destroy()
+
     deck_buttons = []
-    
-    # Reset active deck and safe apps
-    global active_deck_name, safe_apps_lower
     active_deck_name = None
     safe_apps_lower = set()
-    
-    # Reset extra decks toggle
-    global extra_visible
     extra_visible = False
+
     toggle_button.configure(text="Show More Decks")
 
+# -------------------- Refresh Deck Buttons + Shake --------------------
 def refresh_deck_buttons_dynamic():
     global deck_buttons
     data = load_decks()
     deck_names = list(data.keys())
 
-    # Destroy old buttons
-    for btn in deck_buttons:
+    # Destroy old buttons and wrappers
+    for btn, wrapper in deck_buttons:
+        stop_shake(wrapper)
         btn.destroy()
+        wrapper.destroy()
     deck_buttons = []
 
     for i, name in enumerate(deck_names):
-        # Skip creating button if deck is empty (extra safety)
-        if not data.get(name):
-            continue
-        
+        row, col = divmod(i, 3)  # 3 buttons per row
+
+        # Wrapper frame
+        wrapper = ctk.CTkFrame(button_row, fg_color="transparent", width=110, height=40)
+        wrapper.grid_propagate(False)
+        wrapper.grid(row=row, column=col, padx=5, pady=5)
+
+        # Ensure geometry is calculated so we can store x
+        wrapper.update_idletasks()
+        shake_positions[wrapper] = wrapper.winfo_x()  # original x for shake
+
+        # Button inside wrapper
         btn = ctk.CTkButton(
-            button_row,
+            wrapper,
             text=name,
-            command=lambda i=i: use_deck_by_index(i),
-            width=100
+            width=100,
+            command=lambda i=i: use_deck_by_index(i)
         )
-        row, col = i // 3, i % 3
-        if i < 3 or extra_visible:
-            btn.grid(row=row, column=col, padx=5, pady=5)
-        deck_buttons.append(btn)
+        btn.place(relx=0.5, rely=0.5, anchor="center")
+
+        deck_buttons.append((btn, wrapper))
+
+        # Visibility logic
+        if i >= 3 and not extra_visible:
+            wrapper.grid_forget()
 
     update_deck_buttons()
+    set_delete_mode_visual(delete_mode)  # apply delete mode visuals & shake
 
+# -------------------- Shake System --------------------
+def set_delete_mode_visual(active):
+    for btn, wrapper in deck_buttons:
+        if active:
+            btn.configure(fg_color="darkred", hover_color="red")
+            if wrapper.winfo_ismapped():
+                start_shake(wrapper)
+        else:
+            stop_shake(wrapper)
+            btn.configure(fg_color="green", hover_color="green")
+
+def start_shake(wrapper):
+    if wrapper not in shake_positions:
+        wrapper.update_idletasks()
+        shake_positions[wrapper] = wrapper.winfo_x()
+    shake_step(wrapper, direction=1)
+
+def shake_step(wrapper, direction):
+    if not delete_mode or not wrapper.winfo_ismapped():
+        stop_shake(wrapper)
+        return
+
+    original_x = shake_positions.get(wrapper, 0)
+    offset = 3 * direction
+    # Move relative to original x without affecting y
+    wrapper.place(x=original_x + offset, y=wrapper.winfo_y())
+
+    shake_jobs[wrapper] = app.after(40, lambda: shake_step(wrapper, -direction))
+
+def stop_shake(wrapper):
+    job = shake_jobs.pop(wrapper, None)
+    if job:
+        app.after_cancel(job)
+    original_x = shake_positions.get(wrapper, 0)
+    wrapper.place(x=original_x, y=wrapper.winfo_y())
 
 # -------------------- Sweep Control --------------------
 def stop_sweep():
@@ -252,17 +319,57 @@ def start_sweep(deck_name):
     log_message(f"🧹 Focus Sweep started: {deck_name}")
     update_deck_buttons()
 
+
 def use_deck_by_name(deck_name, button):
-    if not deck_name:
+    global delete_mode
+
+    if delete_mode:
+        from tkinter import messagebox
+
+        confirm = messagebox.askyesno(
+            "Delete Deck",
+            f"Delete '{deck_name}' permanently?"
+        )
+        if not confirm:
+            return
+
+        data = read_decks()
+        data.pop(deck_name, None)
+        write_decks(data)
+
+        if active_deck_name == deck_name:
+            stop_sweep()
+
+        log_message(f"🗑️ Deck '{deck_name}' deleted.")
+
+        delete_mode = False
+        delete_deck_button.configure(text="Delete Deck", fg_color="darkred")
+        refresh_deck_buttons_dynamic()
         return
+
+    # normal behavior
     if active_deck_name == deck_name:
         stop_sweep()
     else:
         start_sweep(deck_name)
 
+
 def update_deck_buttons():
-    for b in deck_buttons:
-        b.configure(hover_color="red" if b.cget("text") == active_deck_name else "green")
+    for btn, wrapper in deck_buttons:
+        btn.configure(hover_color="red" if btn.cget("text") == active_deck_name else "green")
+
+def toggle_delete_mode():
+    global delete_mode
+    delete_mode = not delete_mode
+
+    if delete_mode:
+        log_message("⚠️ Delete mode ON: click a deck to delete it.")
+        delete_deck_button.configure(text="Cancel Delete", fg_color="gray")
+    else:
+        log_message("❎ Delete mode cancelled.")
+        delete_deck_button.configure(text="Delete Deck", fg_color="darkred")
+
+    set_delete_mode_visual(delete_mode)
 
         
 # -------------------- Dynamic Deck Buttons --------------------
@@ -282,7 +389,9 @@ def use_deck_by_index(i):
 def toggle_extra_decks():
     global extra_visible
     extra_visible = not extra_visible
-    toggle_button.configure(text="Hide Extra Decks" if extra_visible else "Show More Decks")
+    toggle_button.configure(
+        text="Hide Extra Decks" if extra_visible else "Show More Decks"
+    )
     refresh_deck_buttons_dynamic()
 
 
@@ -321,14 +430,42 @@ textbox.pack(pady=10)
 
 
 # -------------------- Action Buttons --------------------
-action_row = ctk.CTkFrame(app, fg_color="gray25")
-action_row.pack(pady=10)
-ctk.CTkButton(action_row, text="Save Deck", command=save_deck).pack(side="left", padx=5)
-ctk.CTkButton(action_row, text="Remove Apps", command=remove_from_deck).pack(side="left", padx=5)
-ctk.CTkButton(action_row, text="Clear All Decks", command=clear_all_decks).pack(side="left", padx=5)
+action_row_1 = ctk.CTkFrame(app, fg_color="gray25")
+action_row_1.pack(pady=(10, 4))
+
+ctk.CTkButton(
+    action_row_1,
+    text="Save Deck",
+    command=save_deck
+).pack(side="left", padx=5)
+
+ctk.CTkButton(
+    action_row_1,
+    text="Remove Apps",
+    command=remove_from_deck
+).pack(side="left", padx=5)
+
+
+action_row_2 = ctk.CTkFrame(app, fg_color="gray25")
+action_row_2.pack(pady=(4, 10))
+
+delete_deck_button = ctk.CTkButton(
+    action_row_2,
+    text="Delete Deck",
+    fg_color="darkred",
+    command=toggle_delete_mode
+)
+delete_deck_button.pack(side="left", padx=5)
+
+ctk.CTkButton(
+    action_row_2,
+    text="Clear All",
+    fg_color="red",
+    command=clear_all_decks
+).pack(side="left", padx=5)
 
 # -------------------- Version --------------------
-APP_VERSION = "v1.1.3"
+APP_VERSION = "v1.2.0"
 version_label = ctk.CTkLabel(app, text=f"Focus Sweep {APP_VERSION}", font=("Arial", 14), text_color="red")
 version_label.pack(pady=(5, 5))
 
