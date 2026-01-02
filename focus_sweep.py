@@ -20,12 +20,8 @@ app.title("Focus Sweep")
 
 # -------------------- Helper for PyInstaller --------------------
 def resource_path(relative_path):
-    """
-    Returns the absolute path to resources, works for dev & PyInstaller.
-    """
-    if hasattr(sys, "_MEIPASS"):  # PyInstaller bundle folder
-        return os.path.join(sys._MEIPASS, relative_path)
-    return os.path.join(os.path.abspath("."), relative_path)
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, relative_path)
 
 # -------------------- Set App Icon --------------------
 icon_file = resource_path("icon.ico")  # your ICO file
@@ -52,28 +48,43 @@ ensure_decks_file()
 deck_buttons = []
 extra_visible = False
 delete_mode = False
-shake_jobs = {}        # for after jobs
+shake_jobs = {}        # keeps after jobs
+shake_grid_positions = {}   # original grid info for wrappers
 shake_positions = {}   # original x positions of wrappers
 ACTION_BUTTON_COLOR = "#1f6aa5"  # or whatever your main buttons use
-
+last_closed_apps = []
+last_closed_apps_lock = threading.Lock()
 # -------------------- Thresholds --------------------
-MIN_RAM_MB = 80
-MIN_CPU_PERCENT = 3.0
+# MIN_RAM_MB:
+# 150–250 = normal GUI apps
+# 300+   = heavy apps (Chrome, Discord)
+MIN_RAM_MB = 200
 CHECK_INTERVAL = 5
+# -------------------- system_whitelist --------------
+system_whitelist = set(
+    x.lower() + ".exe" if not x.lower().endswith(".exe") else x.lower()
+    for x in [
+        "System", "System Idle Process", "wininit.exe", "winlogon.exe",
+        "services.exe", "lsass.exe", "csrss.exe", "smss.exe",
+        "explorer.exe", "svchost.exe", "sihost.exe",
+        "StartMenuExperienceHost.exe", "ShellExperienceHost.exe",
+        "SearchHost.exe", "TextInputHost.exe", "fontdrvhost.exe",
+        "RuntimeBroker.exe", "dwm.exe", "conhost.exe", "taskhostw.exe",
+        "SecurityHealthService.exe", "SecurityHealthSystray.exe",
+        "MsMpEng.exe", "wmiPrvSE.exe", "WerFault.exe", "audiodg.exe",
+        "python.exe", "cmd.exe", "powershell.exe", "py.exe",
+        "FocusSweep.exe", "Code.exe"
+    ]
+)
+# -------------------- Normalize --------------------
+def normalize(name: str) -> str:
+    if not name:
+        return ""
+    name = name.strip().lower()
+    return name if name.endswith(".exe") else name + ".exe"
 
-# -------------------- Whitelist --------------------
-system_whitelist = [
-    "System", "System Idle Process", "wininit.exe", "winlogon.exe",
-    "services.exe", "lsass.exe", "csrss.exe", "smss.exe","SystemSettings",
-    "explorer.exe", "svchost.exe", "sihost.exe", "StartMenuExperienceHost.exe",
-    "ShellExperienceHost.exe", "SearchHost.exe", "TextInputHost.exe",
-    "fontdrvhost.exe", "RuntimeBroker.exe", "dwm.exe", "conhost.exe",
-    "taskhostw.exe", "SecurityHealthService.exe", "SecurityHealthSystray.exe",
-    "MsMpEng.exe", "wmiPrvSE.exe", "WerFault.exe", "audiodg.exe",
-    "python.exe", "cmd.exe", "powershell.exe", "py.exe","Focus Sweep",
-    "GitExtensions","Git Extensions", "SignalRPG.exe", "WallpaperAlive.exe",
-    "SignalRgb.exe", "Code.exe"
-]
+# Normalize whitelist ONCE
+system_whitelist = set(normalize(x) for x in system_whitelist)
 
 current_pid = os.getpid()
 stop_event = threading.Event()
@@ -81,36 +92,153 @@ sweep_thread = None
 safe_apps_lower = set()
 active_deck_name = None
 
-def normalize(name):
-    if not name:
-        return ""
-    name = name.strip().lower()
-    return name if name.endswith(".exe") else f"{name}.exe"
-
 # -------------------- Focus Sweep Loop --------------------
+last_closed_apps = []
+
 def focus_sweep_loop():
+    global last_closed_apps
     while not stop_event.is_set():
-        for proc in psutil.process_iter(['pid', 'name', 'memory_info']):
+        to_kill, closed_apps = [], []
+
+        for proc in psutil.process_iter(["pid", "name", "memory_info", "username"]):
             try:
                 if proc.pid == current_pid:
                     continue
-                proc_name = normalize(proc.info['name'])
-                if proc_name in safe_apps_lower:
+
+                name_raw = proc.info.get("name")
+                if not name_raw:
                     continue
-                ram_mb = proc.info['memory_info'].rss / (1024*1024)
-                cpu_percent = proc.cpu_percent(None)
-                if ram_mb > MIN_RAM_MB or cpu_percent > MIN_CPU_PERCENT:
-                    try:
-                        proc.terminate()
-                        log_message(f"❌ Closed: {proc.info['name']} | RAM: {ram_mb:.1f} MB | CPU: {cpu_percent:.1f}%")
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        continue
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+
+                name = normalize(name_raw)
+                if name in safe_apps_lower:
+                    continue
+
+                username = (proc.info.get("username") or "").upper()
+                if username.startswith("NT AUTHORITY"):
+                    continue
+
+                ram_mb = proc.info.get("memory_info").rss / (1024 * 1024)
+                if ram_mb >= MIN_RAM_MB:
+                    to_kill.append((proc, ram_mb))
+            except:
                 continue
+
+        for proc, ram_mb in to_kill:
+            try:
+                if not proc.is_running():
+                    continue
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except:
+                    proc.kill()
+                closed_apps.append((normalize(proc.info["name"]), ram_mb))
+            except:
+                continue
+
+        if closed_apps:
+            with last_closed_apps_lock:
+                last_closed_apps = closed_apps.copy()
+            app.after(0, lambda apps=closed_apps: display_summary(apps))
+
         time.sleep(CHECK_INTERVAL)
 
+# -------------------- Display Summary --------------------
+def display_summary(closed_apps):
+    """
+    Logs a short summary of recently closed apps to the textbox.
+    """
+    summary = ", ".join(name for name, _ in closed_apps[:2])
+    extra_count = len(closed_apps) - 2
+    if extra_count > 0:
+        summary += f" (+{extra_count} more)"
+
+    log_message(f"❌ Closed: {summary}")
+# -------------------- Full List Popup --------------------
+def show_full_closed_apps():
+    with last_closed_apps_lock:
+        snapshot = last_closed_apps.copy()
+
+    if not snapshot:
+        messagebox.showinfo("Info", "No closed apps yet.")
+        return
+
+    if hasattr(show_full_closed_apps, "popup") and show_full_closed_apps.popup.winfo_exists():
+        show_full_closed_apps.popup.lift()
+        return
+
+    popup = ctk.CTkToplevel(app)
+    show_full_closed_apps.popup = popup
+    popup.title("Closed Apps")
+    popup.geometry("400x350")
+    popup.resizable(False, False)
+
+    scroll_frame = ctk.CTkScrollableFrame(popup, width=380, height=220)
+    scroll_frame.pack(padx=5, pady=5)
+
+    check_vars = {}
+    for name, ram in snapshot:
+        var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            scroll_frame,
+            text=f"{name} ({ram:.1f} MB)",
+            variable=var
+        ).pack(anchor="w", pady=2)
+        check_vars[name] = var
+
+    deck_label = ctk.CTkLabel(popup, text="Enter deck name:")
+    deck_label.pack(pady=(5, 0))
+
+    deck_input = ctk.CTkEntry(popup, width=200)
+    deck_input.pack(pady=(0, 5))
+
+    def add_to_deck(apps_list):
+        deck_name = deck_input.get().strip()
+        if not deck_name:
+            messagebox.showwarning("Warning", "Enter a deck name first.")
+            return
+        if not apps_list:
+            messagebox.showinfo("Info", "No apps to add.")
+            return
+
+        data = read_decks()
+        existing = data.get(deck_name, [])
+        merged = list(dict.fromkeys(existing + [normalize(a) for a in apps_list]))
+        data[deck_name] = merged
+        write_decks(data)
+
+        log_message(f"✅ Added {', '.join(apps_list)} to deck '{deck_name}'")
+        refresh_deck_buttons_dynamic()
+        popup.destroy()
+
+    ctk.CTkButton(
+        popup,
+        text="Add Selected to Deck",
+        command=lambda: add_to_deck([n for n, var in check_vars.items() if var.get()])
+    ).pack(pady=5)
+
+    ctk.CTkButton(
+        popup,
+        text="Add All to Deck",
+        command=lambda: add_to_deck([n for n, _ in snapshot])
+    ).pack(pady=5)
+
+    popup.bind("<Escape>", lambda e: popup.destroy())
+
+# -------------------- Logging (HARDENED) --------------------
+from datetime import datetime
+
 def log_message(msg):
-    app.after(0, lambda: (textbox.insert("end", msg + "\n"), textbox.see("end")))
+    if not app.winfo_exists():
+        return
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    try:
+        app.after(0, lambda: (
+            textbox.insert("end", f"[{timestamp}] {msg}\n"),
+            textbox.see("end")
+        ))
+    except Exception:
+        pass
 
 # -------------------- Deck Management --------------------
 def read_decks():
@@ -121,8 +249,10 @@ def read_decks():
         return {}
 
 def write_decks(data):
-    with open(DECKS_PATH, "w", encoding="utf-8") as f:
+    tmp = DECKS_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+    os.replace(tmp, DECKS_PATH)
 
 def load_decks():
     return read_decks()
@@ -166,32 +296,46 @@ def save_deck():
 def remove_from_deck():
     deck_name = deck_entry.get().strip()
     apps_raw = apps_entry.get().strip()
-    if not deck_name or not apps_raw:
-        log_message("⚠️ Enter deck name and apps to remove.")
+
+    if not deck_name:
+        log_message("⚠️ Enter a deck name.")
         return
-    apps_to_remove = [normalize(app) for app in apps_raw.split(',')]
+    if not apps_raw:
+        log_message("⚠️ Enter apps to remove.")
+        return
+
+    apps_to_remove = [normalize(app.strip()) for app in apps_raw.split(',') if app.strip()]
     data = read_decks()
+
     if deck_name not in data:
         log_message(f"⚠️ Deck '{deck_name}' does not exist.")
         return
-    # Remove apps
-    data[deck_name] = [app for app in data[deck_name] if app not in apps_to_remove]
-    
-    # Auto-delete empty deck
-    if not data[deck_name]:
+
+    current_apps = data[deck_name]
+    removed = []
+    skipped = []
+
+    for app in apps_to_remove:
+        if app in current_apps:
+            current_apps.remove(app)
+            removed.append(app)
+        else:
+            skipped.append(app)
+
+    # Delete deck if empty
+    if not current_apps:
         del data[deck_name]
         log_message(f"🗑️ Deck '{deck_name}' is now empty and has been deleted.")
     else:
-        log_message(f"🗑️ Removed {apps_to_remove} from '{deck_name}'. Current apps: {data[deck_name]}")
-    
+        data[deck_name] = current_apps
+        log_message(f"🗑️ Removed: {', '.join(removed)}. Skipped: {', '.join(skipped)}.")
+
     write_decks(data)
     apps_entry.delete(0, "end")
     refresh_deck_buttons_dynamic()
 
-    
 def clear_all_decks():
-    from tkinter import messagebox
-
+    global deck_buttons  
     confirm = messagebox.askyesno(
         "Clear All Decks",
         "This will permanently delete ALL decks.\n\nAre you sure?"
@@ -199,12 +343,22 @@ def clear_all_decks():
     if not confirm:
         return
 
-    write_decks({})
+    try:
+        tmp = DECKS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({}, f, indent=2)
+        os.replace(tmp, DECKS_PATH)
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to clear decks: {e}")
+        return
+
     log_message("🗑️ All decks deleted.")
 
     global deck_buttons, active_deck_name, safe_apps_lower, extra_visible
     for btn, wrapper in deck_buttons:
+        stop_shake(wrapper)
         btn.destroy()
+        wrapper.destroy()
 
     deck_buttons = []
     active_deck_name = None
@@ -212,10 +366,18 @@ def clear_all_decks():
     extra_visible = False
 
     toggle_button.configure(text="Show More Decks")
-
 # -------------------- Refresh Deck Buttons + Shake --------------------
 def refresh_deck_buttons_dynamic():
     global deck_buttons
+    if 'deck_buttons' not in globals():
+        deck_buttons = []
+    if 'button_row' not in globals():
+        return  # can't refresh buttons yet
+    """
+    Refreshes all deck buttons dynamically.
+    Destroys old buttons, creates new ones, applies shake if delete mode is on.
+    """
+
     data = load_decks()
     deck_names = list(data.keys())
 
@@ -234,17 +396,8 @@ def refresh_deck_buttons_dynamic():
         wrapper.grid_propagate(False)
         wrapper.grid(row=row, column=col, padx=5, pady=5)
 
-        # Ensure geometry is calculated so we can store x
-        wrapper.update_idletasks()
-        shake_positions[wrapper] = wrapper.winfo_x()  # original x for shake
-
         # Button inside wrapper
-        btn = ctk.CTkButton(
-            wrapper,
-            text=name,
-            width=100,
-            command=lambda i=i: use_deck_by_index(i)
-        )
+        btn = ctk.CTkButton(wrapper, text=name, width=100, command=lambda i=i: use_deck_by_index(i))
         btn.place(relx=0.5, rely=0.5, anchor="center")
 
         deck_buttons.append((btn, wrapper))
@@ -253,8 +406,13 @@ def refresh_deck_buttons_dynamic():
         if i >= 3 and not extra_visible:
             wrapper.grid_forget()
 
+        # Ensure geometry is calculated so we can store x for shake
+        wrapper.update_idletasks()
+        shake_positions[wrapper] = wrapper.winfo_x()
+        shake_grid_positions[wrapper] = wrapper.grid_info()
+
     update_deck_buttons()
-    set_delete_mode_visual(delete_mode)  # apply delete mode visuals & shake
+    set_delete_mode_visual(delete_mode)
 
 # -------------------- Shake System --------------------
 def set_delete_mode_visual(active):
@@ -267,6 +425,8 @@ def set_delete_mode_visual(active):
 def start_shake(wrapper):
     if wrapper in shake_jobs:
         return
+    # store grid info
+    shake_positions[wrapper] = wrapper.grid_info()
     shake_jobs[wrapper] = app.after(0, lambda: shake_step(wrapper, 1))
 
 def shake_step(wrapper, direction):
@@ -282,35 +442,44 @@ def stop_shake(wrapper):
     job = shake_jobs.pop(wrapper, None)
     if job:
         app.after_cancel(job)
-
+    if wrapper.winfo_ismapped() and wrapper in shake_grid_positions:
+        wrapper.place_forget()
+        wrapper.grid(**shake_grid_positions[wrapper])
 # -------------------- Sweep Control --------------------
 def stop_sweep():
     global sweep_thread, active_deck_name
-    if sweep_thread and sweep_thread.is_alive():
-        stop_event.set()
-        sweep_thread.join()
-        sweep_thread = None
-        log_message("🛑 Focus Sweep stopped.")
+    stop_event.set()
     active_deck_name = None
-    stop_event.clear()
     update_deck_buttons()
+
 
 def start_sweep(deck_name):
     global sweep_thread, active_deck_name, safe_apps_lower
-    stop_sweep()
+    log_message("⚠️ All non-deck apps above RAM threshold will be closed.")
+
+    if sweep_thread and sweep_thread.is_alive():
+        return
+
+    stop_event.clear()
+
     data = load_decks()
     if deck_name not in data:
         log_message(f"⚠️ Deck '{deck_name}' not found.")
         return
+
     active_deck_name = deck_name
     allowed_apps = data[deck_name]
-    safe_apps_lower = set(normalize(app) for app in allowed_apps + system_whitelist)
-    # Prime CPU
-    for proc in psutil.process_iter(['pid', 'name']):
-        try: proc.cpu_percent(None)
-        except (psutil.NoSuchProcess, psutil.AccessDenied): continue
-    sweep_thread = threading.Thread(target=focus_sweep_loop, daemon=True)
+
+    safe_apps_lower = set(
+        normalize(app) for app in allowed_apps
+    ) | system_whitelist
+
+    sweep_thread = threading.Thread(
+        target=focus_sweep_loop,
+        daemon=True
+    )
     sweep_thread.start()
+
     log_message(f"🧹 Focus Sweep started: {deck_name}")
     update_deck_buttons()
 
@@ -441,9 +610,8 @@ apps_entry.pack(pady=5)
 # -------------------- Log Textbox --------------------
 textbox = ctk.CTkTextbox(app, width=350, height=150)
 textbox.pack(pady=10)
-
-
 # -------------------- Action Buttons --------------------
+ctk.CTkButton(app, text="Show Full Closed Apps", command=show_full_closed_apps).pack(pady=(0,5))
 action_row_1 = ctk.CTkFrame(app, fg_color="gray25")
 action_row_1.pack(pady=(10, 4))
 
@@ -479,7 +647,7 @@ ctk.CTkButton(
 ).pack(side="left", padx=5)
 
 # -------------------- Version --------------------
-APP_VERSION = "v1.2.0"
+APP_VERSION = "v1.3.0 beta"
 version_label = ctk.CTkLabel(app, text=f"Focus Sweep {APP_VERSION}", font=("Arial", 14), text_color="red")
 version_label.pack(pady=(5, 5))
 

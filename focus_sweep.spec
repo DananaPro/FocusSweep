@@ -4,19 +4,19 @@ block_cipher = None
 
 a = Analysis(
     ['focus_sweep.py'],
-    pathex=[],
+    pathex=['.'],
     binaries=[],
-    datas=[('icon.ico', '.')],  # include your ICO in the bundle
+    datas=[
+        ('icon.ico', '.'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
 )
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
@@ -29,8 +29,8 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,          # GUI app
-    icon='icon.ico',        # your ICO file
+    console=False,
+    icon='icon.ico',
 )
 
 coll = COLLECT(

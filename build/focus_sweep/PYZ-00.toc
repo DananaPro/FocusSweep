@@ -1,4 +1,4 @@
-('C:\\Repos\\FocusSweep\\build\\FocusSweep\\PYZ-00.pyz',
+('C:\\Repos\\FocusSweep\\build\\focus_sweep\\PYZ-00.pyz',
  [('PIL',
    'C:\\Users\\danie\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PIL\\__init__.py',
    'PYMODULE'),
