@@ -4,21 +4,18 @@ block_cipher = None
 
 a = Analysis(
     ['focus_sweep.py'],
-    pathex=['.'],
+    pathex=[],
     binaries=[],
-    datas=[
-        ('icon.ico', '.'),
-    ],
-    hiddenimports=[],
+    datas=[('quotes.json', '.')],
+    hiddenimports=['psutil', 'PIL', 'customtkinter'],
     hookspath=[],
-    hooksconfig={},
     runtime_hooks=[],
     excludes=[],
-    noarchive=False,
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher
 )
-
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-
 exe = EXE(
     pyz,
     a.scripts,
@@ -30,9 +27,8 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,
-    icon='icon.ico',
+    icon='icon.ico'
 )
-
 coll = COLLECT(
     exe,
     a.binaries,
@@ -40,6 +36,5 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=True,
-    upx_exclude=[],
     name='FocusSweep'
 )
